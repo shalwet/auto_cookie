@@ -90,8 +90,9 @@ def infer(frame):
     """Инференс через ONNX Runtime. Возвращает список (name, conf, x1, y1, x2, y2) в координатах экрана."""
     img, scale, new_w, new_h = letterbox(frame, IMGSZ)
 
-    # pyautogui отдаёт RGB; YOLO обучен на RGB. В NCHW, нормализация 0..1
-    inp = img[:, :, ::-1].astype(np.float32) / 255.0  # BGR->RGB
+    # frame уже в RGB (pyautogui.screenshot), ONNX-модель ожидает RGB.
+    # NCHW + нормализация 0..1 (без перестановки каналов!)
+    inp = img.astype(np.float32) / 255.0
     inp = np.transpose(inp, (2, 0, 1))[None, ...]     # HWC -> 1CHW
 
     out = session.run([output_name], {input_name: inp})[0]  # (1, 4+nc, N)
