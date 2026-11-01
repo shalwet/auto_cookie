@@ -1,3 +1,4 @@
+import os
 import cv2
 import numpy as np
 import pyautogui
@@ -34,7 +35,60 @@ def toggle():
 
 keyboard.add_hotkey("space", toggle)
 
-CONF = 0.25
+# ===== Настройка уверенности (порог детекции) =====
+CONF_FILE = "conf.txt"
+
+
+def load_conf(default=0.25):
+    """Читает CONF из conf.txt (одно число). Если файла нет — берёт из config.yaml, иначе default."""
+    try:
+        with open(CONF_FILE, "r", encoding="utf-8") as f:
+            return float(f.read().strip())
+    except Exception:
+        pass
+    try:
+        import yaml
+        with open("config.yaml", "r", encoding="utf-8") as f:
+            cfg = yaml.safe_load(f) or {}
+        return float(cfg.get("confidence_threshold", default))
+    except Exception:
+        return default
+
+
+def save_conf(value):
+    try:
+        with open(CONF_FILE, "w", encoding="utf-8") as f:
+            f.write(f"{value:.2f}")
+    except Exception as e:
+        print("Не удалось сохранить conf.txt:", e)
+
+
+CONF = load_conf()
+CONF_STEP = 0.05          # шаг изменения уверенности по хоткеям
+CONF_MIN = 0.05
+CONF_MAX = 0.95
+
+
+def conf_up():
+    global CONF
+    CONF = min(CONF_MAX, round(CONF + CONF_STEP, 2))
+    save_conf(CONF)
+    print(f">>> уверенность (CONF) = {CONF:.2f}")
+
+
+def conf_down():
+    global CONF
+    CONF = max(CONF_MIN, round(CONF - CONF_STEP, 2))
+    save_conf(CONF)
+    print(f">>> уверенность (CONF) = {CONF:.2f}")
+
+
+# '+'/'-' (и '='/'_' как запасные) — поднять/опустить порог уверенности на ходу
+keyboard.add_hotkey("+", conf_up)
+keyboard.add_hotkey("=", conf_up)
+keyboard.add_hotkey("-", conf_down)
+keyboard.add_hotkey("_", conf_down)
+
 NMS_THRESHOLD = 0.45
 SLEEP = 0.1
 
@@ -67,6 +121,7 @@ def game_clicker_loop():
 threading.Thread(target=game_clicker_loop, daemon=True).start()
 
 print("ПРОБЕЛ — старт/стоп кликера. Esc — выход.")
+print(f"Настройка уверенности: '+' повысить, '-' понизить (текущая CONF = {CONF:.2f}, сохраняется в conf.txt)")
 print("Целевые классы: game, upgrade, reclama")
 
 

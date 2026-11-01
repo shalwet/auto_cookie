@@ -21,3 +21,6 @@ screenshots_augmented/
 
 # Caches
 *.cache
+
+# Runtime-настройка уверенности (локальный файл пользователя)
+conf.txt
