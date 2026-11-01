@@ -10,6 +10,16 @@ from ultralytics import YOLO
 
 model = YOLO("bestV1.pt")
 
+# В модели класс №2 назван "advertising" — приводим его к нашему имени "reclama"
+CLASS_ALIASES = {
+    "advertising": "reclama",
+    "reklama": "reclama",
+    "ad": "reclama",
+}
+
+def normalize_name(name):
+    return CLASS_ALIASES.get(name, name)
+
 pyautogui.PAUSE = 0.02
 pyautogui.FAILSAFE = True
 
@@ -136,7 +146,7 @@ while True:
     for r in results:
         for box in r.boxes:
             cls_id = int(box.cls[0])
-            name = model.names[cls_id]
+            name = normalize_name(model.names[cls_id])
             if name not in ("game", "upgrade", "reclama"):
                 continue
 
