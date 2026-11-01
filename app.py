@@ -3,6 +3,7 @@ import numpy as np
 import pyautogui
 import time
 import keyboard
+import threading
 
 import onnxruntime as ort
 
@@ -23,7 +24,10 @@ pyautogui.PAUSE = 0.02
 pyautogui.FAILSAFE = True
 
 running = False
-game_pos = None          # текущая позиция game (обновляется из основного цикла)
+game_pos = None                 # последняя позиция game (в координатах экрана)
+click_lock = threading.Lock()   # мышь — только по одному
+pause_game = threading.Event()  # set => фоновый поток game не жмёт
+pause_game.clear()
 
 def toggle():
     global running
@@ -32,9 +36,12 @@ def toggle():
 
 keyboard.add_hotkey("space", toggle)
 
-CONF = 0.5
+CONF = 0.25
 NMS_THRESHOLD = 0.45
 SLEEP = 0.1
+
+# Печатать отладку по найденным классам каждый кадр
+DEBUG_DETECTIONS = True
 
 # Шаг вертикального прохода по боксу upgrade (в пикселях)
 UPGRADE_STEP = 5
@@ -42,29 +49,42 @@ UPGRADE_STEP = 5
 # Смещение курсора по upgrade вправо (в пикселях)
 UPGRADE_X_OFFSET = 20
 
-# Пауза между кликами по game (сек) — меньше = чаще
-GAME_CLICK_INTERVAL = 0.03
+# Пауза между кликами по game в фоновом потоке (сек) — меньше = чаще
+GAME_CLICK_INTERVAL = 0.02
 
-# Сколько раз подряд жать game, когда upgrade/reclama на экране нет
-GAME_BURST = 20
+
+def game_clicker_loop():
+    """Кликает по game ПОСТОЯННО и параллельно, пока не выставлен pause_game."""
+    while True:
+        pos = game_pos
+        if running and pos is not None and not pause_game.is_set():
+            with click_lock:
+                pyautogui.click(pos[0], pos[1])
+            time.sleep(GAME_CLICK_INTERVAL)
+        else:
+            time.sleep(0.005)
+
+
+# Фоновый поток непрерывных кликов по game
+threading.Thread(target=game_clicker_loop, daemon=True).start()
 
 print("ПРОБЕЛ — старт/стоп кликера. Esc — выход.")
 print("Целевые классы: game, upgrade, reclama")
 
 
 def letterbox(frame, imgsz):
-    """Ресайз с сохранением пропорций и паддинг до квадрата imgsz (top-left, как раньше)."""
+    """Ресайз с сохранением пропорций и паддинг до квадрата imgsz (top-left)."""
     h, w = frame.shape[:2]
     scale = imgsz / max(h, w)
     new_w, new_h = int(w * scale), int(h * scale)
     resized = cv2.resize(frame, (new_w, new_h))
     canvas = np.full((imgsz, imgsz, 3), 114, dtype=np.uint8)
     canvas[:new_h, :new_w] = resized
-    return canvas, scale, new_w, new_h
+    return canvas, scale
 
 
 def nms(boxes_xywh, scores, score_threshold, nms_threshold):
-    """Возвращает индексы оставшихся боксов (cv2.dnn.NMSBoxes в формате xywh)."""
+    """Индексы оставшихся боксов (cv2.dnn.NMSBoxes в формате xywh)."""
     if len(boxes_xywh) == 0:
         return []
     idxs = cv2.dnn.NMSBoxes(
@@ -73,20 +93,34 @@ def nms(boxes_xywh, scores, score_threshold, nms_threshold):
     return np.array(idxs).flatten().tolist()
 
 
+def nms_per_class(boxes_xywh, scores, class_ids, score_threshold, nms_threshold):
+    """NMS ОТДЕЛЬНО по каждому классу.
+
+    Обычный NMS подавляет любые пересекающиеся боксы, поэтому перекрывающийся
+    высокоуверенный `game` мог «съедать» `upgrade`/`reclama`.
+    """
+    keep = []
+    for c in np.unique(class_ids):
+        idx = np.where(class_ids == c)[0]
+        if idx.size == 0:
+            continue
+        kept = nms(boxes_xywh[idx], scores[idx], score_threshold, nms_threshold)
+        keep.extend(idx[j] for j in kept)
+    return keep
+
+
 def infer(frame):
-    """Инференс через ONNX Runtime. Возвращает список (name, conf, x1, y1, x2, y2) в координатах экрана."""
-    img, scale, new_w, new_h = letterbox(frame, IMGSZ)
+    """Инференс ONNX. Возвращает список (name, conf, x1, y1, x2, y2) в координатах экрана."""
+    img, scale = letterbox(frame, IMGSZ)
 
     # frame уже в RGB (pyautogui.screenshot), ONNX-модель ожидает RGB.
-    # NCHW + нормализация 0..1 (без перестановки каналов!)
     inp = img.astype(np.float32) / 255.0
     inp = np.transpose(inp, (2, 0, 1))[None, ...]     # HWC -> 1CHW
 
     out = session.run([output_name], {input_name: inp})[0]  # (1, 4+nc, N)
 
-    preds = np.squeeze(out, axis=0)          # (4+nc, N)
-    preds = preds.T                          # (N, 4+nc)
-    boxes_xywh = preds[:, :4]                # cx, cy, w, h
+    preds = np.squeeze(out, axis=0).T        # (N, 4+nc)
+    boxes_xywh = preds[:, :4]                # cx, cy, w, h (в координатах letterbox)
     class_scores = preds[:, 4:]              # nc столбцов
 
     class_ids = np.argmax(class_scores, axis=1)
@@ -100,24 +134,17 @@ def infer(frame):
     if len(scores) == 0:
         return []
 
-    keep = nms(boxes_xywh, scores, CONF, NMS_THRESHOLD)
+    keep = nms_per_class(boxes_xywh, scores, class_ids, CONF, NMS_THRESHOLD)
 
     results = []
     for i in keep:
         name = CLASS_NAMES[class_ids[i]] if class_ids[i] < len(CLASS_NAMES) else str(class_ids[i])
 
         cx, cy, bw, bh = boxes_xywh[i]
-        # cxcywh -> xyxy в координатах letterbox
-        x1 = cx - bw / 2
-        y1 = cy - bh / 2
-        x2 = cx + bw / 2
-        y2 = cy + bh / 2
-
-        # убираем масштаб letterbox -> экранные координаты
-        x1 = int(x1 / scale)
-        y1 = int(y1 / scale)
-        x2 = int(x2 / scale)
-        y2 = int(y2 / scale)
+        x1 = int((cx - bw / 2) / scale)
+        y1 = int((cy - bh / 2) / scale)
+        x2 = int((cx + bw / 2) / scale)
+        y2 = int((cy + bh / 2) / scale)
 
         results.append((name, float(scores[i]), x1, y1, x2, y2))
 
@@ -126,6 +153,7 @@ def infer(frame):
 
 while True:
     if not running:
+        pause_game.clear()
         time.sleep(0.05)
         continue
 
@@ -137,14 +165,19 @@ while True:
     # Инференс ONNX
     detections = infer(frame)
 
-    # Собираем ВСЕ целевые детекции (не только первую!)
+    if DEBUG_DETECTIONS:
+        by_class = {}
+        for nm, cf, *_ in detections:
+            by_class.setdefault(nm, []).append(round(cf, 2))
+        print(f"[{time.strftime('%H:%M:%S')}] detections: {by_class}")
+
+    # Собираем ВСЕ целевые детекции
     targets = []
     game_pos = None  # сброс: если game не найден, поток перестанет кликать
     for name, conf, x1, y1, x2, y2 in detections:
         if name not in ("game", "upgrade", "reclama"):
             continue
 
-        # Страховка: не выходим за пределы экрана
         x1 = max(0, min(x1, w - 1))
         y1 = max(0, min(y1, h - 1))
         x2 = max(0, min(x2, w - 1))
@@ -152,43 +185,47 @@ while True:
 
         targets.append((name, conf, x1, y1, x2, y2))
 
-    # Приоритет: сначала game, затем upgrade, затем reclama (по убыванию conf внутри класса)
+    # Приоритет: сначала game, затем upgrade, затем reclama
     priority = {"game": 0, "upgrade": 1, "reclama": 2}
     targets.sort(key=lambda t: (priority[t[0]], -t[1]))
 
+    # Позиция game (кликается фоновым потоком)
     for name, conf, x1, y1, x2, y2 in targets:
+        if name == "game":
+            game_pos = ((x1 + x2) // 2, (y1 + y2) // 2)
+            break
+
+    # Проход по upgrade и клик по reclama — под паузой game-потока,
+    # чтобы мышь не «дралась» между потоками.
+    needs_mouse = any(t[0] in ("upgrade", "reclama") for t in targets)
+    if needs_mouse:
+        pause_game.set()
+        time.sleep(0.05)  # даём фоновому потоку завершить текущий клик
+
+    for name, conf, x1, y1, x2, y2 in targets:
+        if name == "game":
+            continue
         cx = (x1 + x2) // 2
         cy = (y1 + y2) // 2
 
-        if name == "game":
-            # Позицию game отдаём отдельному потоку — он кликает часто и параллельно
-            game_pos = (cx, cy)
-        elif name == "upgrade":
-            # Кликаем по всему боксу сверху вниз, чуть правее центра.
-            # Между шагами жмём game, чтобы он кликался НЕ прекращаясь.
+        if name == "upgrade":
             cx = min(cx + UPGRADE_X_OFFSET, w - 1)
             print(f"[{time.strftime('%H:%M:%S')}] upgrade ({conf:.2f}) бокс ({x1},{y1})-({x2},{y2})")
             y = y1
             while y <= y2:
-                pyautogui.moveTo(cx, y, duration=0.02)
-                pyautogui.click()
+                with click_lock:
+                    pyautogui.moveTo(cx, y, duration=0.02)
+                    pyautogui.click()
                 time.sleep(0.01)
-                if game_pos is not None:
-                    pyautogui.click(game_pos[0], game_pos[1])
                 y += UPGRADE_STEP
         elif name == "reclama":
             print(f"[{time.strftime('%H:%M:%S')}] reclama ({conf:.2f}) в ({cx}, {cy})")
-            pyautogui.moveTo(cx, cy, duration=0.05)
-            time.sleep(0.02)
-            pyautogui.click()
+            with click_lock:
+                pyautogui.moveTo(cx, cy, duration=0.05)
+                pyautogui.click()
             time.sleep(0.05)
-            if game_pos is not None:
-                pyautogui.click(game_pos[0], game_pos[1])
 
-    # Game кликаем ВСЕГДА и по многу раз — «без остановки»
-    if game_pos is not None:
-        for _ in range(GAME_BURST):
-            pyautogui.click(game_pos[0], game_pos[1])
-            time.sleep(GAME_CLICK_INTERVAL)
+    if needs_mouse:
+        pause_game.clear()  # снова включаем непрерывные клики по game
 
     time.sleep(SLEEP)
