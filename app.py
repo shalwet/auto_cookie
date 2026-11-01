@@ -27,11 +27,16 @@ pyautogui.FAILSAFE = True
 running = False
 game_pos = None                 # последняя позиция game (в координатах экрана)
 click_lock = threading.Lock()   # мышь — только по одному
+home_pos = None                 # «домашняя» позиция курсора (фиксируется при старте)
 
 def toggle():
-    global running
+    global running, home_pos
     running = not running
-    print(">>>", "ВКЛ" if running else "ВЫКЛ")
+    if running:
+        home_pos = pyautogui.position()  # запоминаем, куда возвращать курсор
+        print(f">>> ВКЛ (курсор возвращается в {home_pos})")
+    else:
+        print(">>> ВЫКЛ")
 
 keyboard.add_hotkey("space", toggle)
 
@@ -111,19 +116,16 @@ GAME_RESTORE_CURSOR = True
 def game_clicker_loop():
     """Кликает по game НЕПРЕРЫВНО, без остановки, всё время пока включён кликер.
 
-    Если GAME_RESTORE_CURSOR=True — после клика возвращает курсор на прежнее
-    место, чтобы мышь не «уезжала» к объекту game (обычно он справа).
+    Если GAME_RESTORE_CURSOR=True — после клика возвращает курсор в home_pos,
+    поэтому мышь НЕ «уезжает» вправо к объекту game.
     """
     while True:
         pos = game_pos
         if running and pos is not None:
             with click_lock:
-                if GAME_RESTORE_CURSOR:
-                    prev = pyautogui.position()
-                    pyautogui.click(pos[0], pos[1])
-                    pyautogui.moveTo(prev[0], prev[1], duration=0)
-                else:
-                    pyautogui.click(pos[0], pos[1])
+                pyautogui.click(pos[0], pos[1])
+                if GAME_RESTORE_CURSOR and home_pos is not None:
+                    pyautogui.moveTo(home_pos[0], home_pos[1], duration=0)
             time.sleep(GAME_CLICK_INTERVAL)
         else:
             time.sleep(0.005)
@@ -275,6 +277,8 @@ while True:
                 with click_lock:
                     pyautogui.moveTo(cx, y, duration=0.02)
                     pyautogui.click()
+                    if GAME_RESTORE_CURSOR and home_pos is not None:
+                        pyautogui.moveTo(home_pos[0], home_pos[1], duration=0)
                 time.sleep(0.01)
                 y += UPGRADE_STEP
         elif name == "reclama":
@@ -282,6 +286,8 @@ while True:
             with click_lock:
                 pyautogui.moveTo(cx, cy, duration=0.05)
                 pyautogui.click()
+                if GAME_RESTORE_CURSOR and home_pos is not None:
+                    pyautogui.moveTo(home_pos[0], home_pos[1], duration=0)
             time.sleep(0.05)
 
     time.sleep(SLEEP)
