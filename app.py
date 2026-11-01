@@ -104,14 +104,26 @@ UPGRADE_X_OFFSET = 20
 # Пауза между кликами по game в фоновом потоке (сек) — меньше = чаще
 GAME_CLICK_INTERVAL = 0.02
 
+# Возвращать курсор на место после клика по game (чтобы курсор не «уезжал»)
+GAME_RESTORE_CURSOR = True
+
 
 def game_clicker_loop():
-    """Кликает по game НЕПРЕРЫВНО, без остановки, всё время пока включён кликер."""
+    """Кликает по game НЕПРЕРЫВНО, без остановки, всё время пока включён кликер.
+
+    Если GAME_RESTORE_CURSOR=True — после клика возвращает курсор на прежнее
+    место, чтобы мышь не «уезжала» к объекту game (обычно он справа).
+    """
     while True:
         pos = game_pos
         if running and pos is not None:
             with click_lock:
-                pyautogui.click(pos[0], pos[1])
+                if GAME_RESTORE_CURSOR:
+                    prev = pyautogui.position()
+                    pyautogui.click(pos[0], pos[1])
+                    pyautogui.moveTo(prev[0], prev[1], duration=0)
+                else:
+                    pyautogui.click(pos[0], pos[1])
             time.sleep(GAME_CLICK_INTERVAL)
         else:
             time.sleep(0.005)
