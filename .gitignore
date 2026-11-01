@@ -1,0 +1,23 @@
+# Python-generated files
+__pycache__/
+*.py[oc]
+build/
+dist/
+wheels/
+*.egg-info
+
+# Virtual environments
+.venv
+venv/
+env/
+
+# Datasets / training artifacts
+images/
+itog/
+labels/
+runs/
+screenshots/
+screenshots_augmented/
+
+# Caches
+*.cache

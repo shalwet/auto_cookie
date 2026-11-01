@@ -1,0 +1,10 @@
+type: yolov8
+name: MySuperGennius
+display_name: EvgenSuperLox
+model_path: ./bestV1.onnx  # <-- проверьте этот путь
+nms_threshold: 0.45
+confidence_threshold: 0.25
+classes:
+  - game
+  - upgrade
+  - reclama

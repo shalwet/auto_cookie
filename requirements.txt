@@ -1,0 +1,19 @@
+# Зависимости проекта (собраны из импортов в Python-скриптах)
+
+# YOLO / обучение и инференс (train.py, app.py, ptToOnxx.py, auto_clicker.py)
+ultralytics
+
+# Работа с изображениями и массивами (augment.py, auto_clicker.py)
+opencv-python
+numpy
+
+# Автоматизация экрана и управление (auto_clicker.py, screener.py)
+pyautogui
+keyboard
+
+# Аугментация изображений (augment.py)
+albumentations
+
+# Экспорт модели в ONNX (ptToOnxx.py)
+onnx
+onnxruntime
