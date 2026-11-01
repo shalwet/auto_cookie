@@ -3,7 +3,6 @@ import numpy as np
 import pyautogui
 import time
 import keyboard
-import threading
 
 import onnxruntime as ort
 
@@ -25,7 +24,6 @@ pyautogui.FAILSAFE = True
 
 running = False
 game_pos = None          # текущая позиция game (обновляется из основного цикла)
-mouse_lock = threading.Lock()
 
 def toggle():
     global running
@@ -44,22 +42,11 @@ UPGRADE_STEP = 5
 # Смещение курсора по upgrade вправо (в пикселях)
 UPGRADE_X_OFFSET = 20
 
-# Как часто отдельный поток кликает по game (сек) — меньше = чаще
+# Пауза между кликами по game (сек) — меньше = чаще
 GAME_CLICK_INTERVAL = 0.03
 
-def game_clicker_loop():
-    """Кликает по game ПАРАЛЛЕЛЬНО с проходом по upgrade."""
-    while True:
-        pos = game_pos
-        if running and pos is not None:
-            with mouse_lock:
-                pyautogui.click(pos[0], pos[1])
-            time.sleep(GAME_CLICK_INTERVAL)
-        else:
-            time.sleep(0.01)
-
-# Отдельный поток для частых кликов по game
-threading.Thread(target=game_clicker_loop, daemon=True).start()
+# Сколько раз подряд жать game, когда upgrade/reclama на экране нет
+GAME_BURST = 20
 
 print("ПРОБЕЛ — старт/стоп кликера. Esc — выход.")
 print("Целевые классы: game, upgrade, reclama")
@@ -177,23 +164,31 @@ while True:
             # Позицию game отдаём отдельному потоку — он кликает часто и параллельно
             game_pos = (cx, cy)
         elif name == "upgrade":
-            # Кликаем по всему боксу сверху вниз, чуть правее центра
+            # Кликаем по всему боксу сверху вниз, чуть правее центра.
+            # Между шагами жмём game, чтобы он кликался НЕ прекращаясь.
             cx = min(cx + UPGRADE_X_OFFSET, w - 1)
             print(f"[{time.strftime('%H:%M:%S')}] upgrade ({conf:.2f}) бокс ({x1},{y1})-({x2},{y2})")
             y = y1
             while y <= y2:
-                with mouse_lock:
-                    pyautogui.moveTo(cx, y, duration=0.02)
-                    time.sleep(0.01)
-                    pyautogui.click()
-                time.sleep(0.02)
+                pyautogui.moveTo(cx, y, duration=0.02)
+                pyautogui.click()
+                time.sleep(0.01)
+                if game_pos is not None:
+                    pyautogui.click(game_pos[0], game_pos[1])
                 y += UPGRADE_STEP
         elif name == "reclama":
             print(f"[{time.strftime('%H:%M:%S')}] reclama ({conf:.2f}) в ({cx}, {cy})")
-            with mouse_lock:
-                pyautogui.moveTo(cx, cy, duration=0.05)
-                time.sleep(0.02)
-                pyautogui.click()
+            pyautogui.moveTo(cx, cy, duration=0.05)
+            time.sleep(0.02)
+            pyautogui.click()
             time.sleep(0.05)
+            if game_pos is not None:
+                pyautogui.click(game_pos[0], game_pos[1])
+
+    # Game кликаем ВСЕГДА и по многу раз — «без остановки»
+    if game_pos is not None:
+        for _ in range(GAME_BURST):
+            pyautogui.click(game_pos[0], game_pos[1])
+            time.sleep(GAME_CLICK_INTERVAL)
 
     time.sleep(SLEEP)
