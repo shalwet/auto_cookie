@@ -26,8 +26,6 @@ pyautogui.FAILSAFE = True
 running = False
 game_pos = None                 # последняя позиция game (в координатах экрана)
 click_lock = threading.Lock()   # мышь — только по одному
-pause_game = threading.Event()  # set => фоновый поток game не жмёт
-pause_game.clear()
 
 def toggle():
     global running
@@ -54,10 +52,10 @@ GAME_CLICK_INTERVAL = 0.02
 
 
 def game_clicker_loop():
-    """Кликает по game ПОСТОЯННО и параллельно, пока не выставлен pause_game."""
+    """Кликает по game НЕПРЕРЫВНО, без остановки, всё время пока включён кликер."""
     while True:
         pos = game_pos
-        if running and pos is not None and not pause_game.is_set():
+        if running and pos is not None:
             with click_lock:
                 pyautogui.click(pos[0], pos[1])
             time.sleep(GAME_CLICK_INTERVAL)
@@ -153,7 +151,6 @@ def infer(frame):
 
 while True:
     if not running:
-        pause_game.clear()
         time.sleep(0.05)
         continue
 
@@ -195,13 +192,8 @@ while True:
             game_pos = ((x1 + x2) // 2, (y1 + y2) // 2)
             break
 
-    # Проход по upgrade и клик по reclama — под паузой game-потока,
-    # чтобы мышь не «дралась» между потоками.
-    needs_mouse = any(t[0] in ("upgrade", "reclama") for t in targets)
-    if needs_mouse:
-        pause_game.set()
-        time.sleep(0.05)  # даём фоновому потоку завершить текущий клик
-
+    # Проход по upgrade и клик по reclama. game НЕ останавливается —
+    # он продолжает щёлкать в фоне, а click_lock аккуратно чередует клики.
     for name, conf, x1, y1, x2, y2 in targets:
         if name == "game":
             continue
@@ -224,8 +216,5 @@ while True:
                 pyautogui.moveTo(cx, cy, duration=0.05)
                 pyautogui.click()
             time.sleep(0.05)
-
-    if needs_mouse:
-        pause_game.clear()  # снова включаем непрерывные клики по game
 
     time.sleep(SLEEP)
